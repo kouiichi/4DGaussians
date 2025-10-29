@@ -42,6 +42,7 @@ class CameraInfo(NamedTuple):
     width: int
     height: int
     time : float
+    control_vec : np.array
     mask: np.array
    
 class SceneInfo(NamedTuple):
@@ -116,7 +117,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image = PILtoTorch(image,None)
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                               image_path=image_path, image_name=image_name, width=width, height=height,
-                              time = float(idx/len(cam_extrinsics)), mask=None) # default by monocular settings.
+                              time = float(idx/len(cam_extrinsics)), control_vec=None, mask=None) # default by monocular settings.
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -254,7 +255,7 @@ def generateCamerasFromTransforms(path, template_transformsfile, extension, maxt
         FovX = fovx
         cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                             image_path=None, image_name=None, width=image.shape[1], height=image.shape[2],
-                            time = time, mask=None))
+                            time = time, control_vec=None, mask=None))
     return cam_infos
 def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png", mapper = {}):
     cam_infos = []
@@ -292,7 +293,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                             image_path=image_path, image_name=image_name, width=image.shape[1], height=image.shape[2],
-                            time = time, mask=None))
+                            time = time, control_vec=None, mask=None))
             
     return cam_infos
 def read_timeline(path):
@@ -632,11 +633,172 @@ def readMultipleViewinfos(datadir,llffhold=8):
                            ply_path=ply_path)
     return scene_info
 
+
+def readToyArmInfo(datadir, eval=False, llffhold=8):
+    """
+    Load Toy Arm dataset with joint position control vectors
+
+    Dataset format:
+    - transforms.json with 'cameras' and 'frames' keys
+    - cameras: list of 12 camera parameters
+    - frames: list of 122,760 frames with joint_pos control vectors
+    
+    Args:
+        datadir: path to dataset directory containing transforms.json
+        eval: if True, split train/test; if False, use all for training
+        llffhold: every Nth frame for test set (default: 8)
+        
+    Returns:
+        SceneInfo with train/test/video cameras and point cloud
+    """
+    
+    transforms_path = os.path.join(datadir, "transforms.json")
+    with open(transforms_path) as f:
+        data = json.load(f)
+    
+    cameras_meta = data['cameras'] # 12 camera parameters
+    frames_data = data['frames'] # 122,760 frames
+    
+    print(f" Found {len(cameras_meta)} cameras")
+    print(f" Found {len(frames_data)} frames")
+    
+    # Collect all joint angles to compute normalization parameters
+    print(" Computing joint angle statistics for normalization...")
+    all_joint_pos = []
+    for frame in frames_data:
+        all_joint_pos.append(frame['joint_pos'])
+    all_joint_pos = np.array(all_joint_pos, dtype=np.float32)  # [N, 6]
+    
+    # Compute per-joint min/max for normalization
+    joint_min = all_joint_pos.min(axis=0)  # [6,]
+    joint_max = all_joint_pos.max(axis=0)  # [6,]
+    joint_range = joint_max - joint_min
+    
+    # Avoid division by zero for static joints
+    joint_range = np.where(joint_range < 1e-6, 1.0, joint_range)
+
+    cam_infos = []
+    
+    for idx, frame in enumerate(tqdm(frames_data, desc="Loading frames")):
+        # Get camera metadata
+        camera_idx = frame['camera_idx']
+        camera_meta = cameras_meta[camera_idx]
+        
+        # Extract camera intrinsics
+        fl_x = camera_meta['fl_x']
+        fl_y = camera_meta['fl_y']
+        cx = camera_meta['cx']
+        cy = camera_meta['cy']
+        width = camera_meta['w']
+        height = camera_meta['h']
+        
+        # Calculate Field of View
+        FovX = focal2fov(fl_x, width)
+        FovY = focal2fov(fl_y, height)
+        
+        # Extract camera extrinsics from transform_matrix
+        transform_matrix = np.array(frame['transform_matrix'])
+        
+        # Convert transform_matrix to R and T
+        # transform_matrix is camera-to-world (C2W)
+        # We need world-to-camera (W2C) for Gaussian Splatting
+        c2w = transform_matrix
+        w2c = np.linalg.inv(c2w)
+        
+        # Extract rotation and translation
+        R = np.transpose(w2c[:3, :3])
+        T = w2c[:3, 3]
+        
+        # Load image
+        image_path = os.path.join(datadir, frame['file_path'])
+        image_name = Path(image_path).stem
+        
+        try:
+            image = Image.open(image_path)
+            image = PILtoTorch(image, None)
+        except Exception as e:
+            print(f"Warning: Failed to load image {image_path}: {e}")
+            # Use dummy image
+            image = torch.zeros((3, height, width))
+
+        # Extract control vector (joint angles) and normalize to [-1, 1]
+        joint_pos_raw = np.array(frame['joint_pos'], dtype=np.float32)  # [6,]
+        control_vec = 2.0 * (joint_pos_raw - joint_min) / joint_range - 1.0  # [-1, 1]
+        
+        time = frame['time']
+        
+        # Create CameraInfo
+        cam_info = CameraInfo(
+            uid=idx,
+            R=R,
+            T=T,
+            FovY=FovY,
+            FovX=FovX,
+            image=image,
+            image_path=image_path,
+            image_name=image_name,
+            width=width,
+            height=height,
+            time=time,
+            control_vec=control_vec,
+            mask=None
+        )
+        
+        cam_infos.append(cam_info)
+    
+    if eval:
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+        print(f" Train: {len(train_cam_infos)} frames, Test: {len(test_cam_infos)} frames")
+    else:
+        train_cam_infos = cam_infos
+        test_cam_infos = []
+        print(f" Using all {len(train_cam_infos)} frames for training")
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+    
+    ply_path = os.path.join(datadir, "points3d.ply")
+
+    if not os.path.exists(ply_path):
+        num_pts = 5000
+        xyz = np.random.random((num_pts, 3)) * 2.0 - 1.0
+        colors = np.random.random((num_pts, 3))
+        normals = np.zeros((num_pts, 3))
+
+        pcd = BasicPointCloud(points=xyz, colors=colors, normals=normals)
+
+    else:
+        pcd = fetchPly(ply_path)
+
+    unique_times = sorted(set([c.time for c in train_cam_infos]))
+    video_cam_infos = []
+
+    for time_val in unique_times:
+        matching_cams = [c for c in train_cam_infos if c.time == time_val]
+        if matching_cams:
+            video_cam_infos.append(matching_cams[0])
+    
+    max_time = max([c.time for c in cam_infos])
+
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        video_cameras=video_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+        maxtime=max_time
+    )
+    
+    return scene_info
+        
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender" : readNerfSyntheticInfo,
     "dynerf" : readdynerfInfo,
     "nerfies": readHyperDataInfos,  # NeRFies & HyperNeRF dataset proposed by [https://github.com/google/hypernerf/releases/tag/v0.1]
     "PanopticSports" : readPanopticSportsinfos,
-    "MultipleView": readMultipleViewinfos
+    "MultipleView": readMultipleViewinfos,
+    "ToyArm": readToyArmInfo,
 }

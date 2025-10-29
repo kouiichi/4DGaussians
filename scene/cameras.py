@@ -17,8 +17,8 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
-                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", time = 0,
-                 mask = None, depth=None
+                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", time = 0, control_vec = None,
+                 mask = None, depth = None
                  ):
         super(Camera, self).__init__()
 
@@ -30,6 +30,17 @@ class Camera(nn.Module):
         self.FoVy = FoVy
         self.image_name = image_name
         self.time = time
+        
+        if control_vec is not None:
+            if isinstance(control_vec, np.ndarray):
+                self.control_vec = torch.from_numpy(control_vec).float()
+            elif isinstance(control_vec, torch.Tensor):
+                self.control_vec = control_vec.float()
+            else:
+                self.control_vec = torch.tensor(control_vec, dtype=torch.float32)
+        else:
+            self.control_vec = torch.zeros(6, dtype=torch.float32)
+        
         try:
             self.data_device = torch.device(data_device)
         except Exception as e:
@@ -64,7 +75,7 @@ class Camera(nn.Module):
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
 class MiniCam:
-    def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform, time):
+    def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform, time, control_vec=None):
         self.image_width = width
         self.image_height = height    
         self.FoVy = fovy
@@ -76,4 +87,8 @@ class MiniCam:
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
         self.time = time
-
+        
+        if control_vec is not None:
+            self.control_vec = control_vec
+        else:
+            self.control_vec = torch.zeros(6, dtype=torch.float32)
