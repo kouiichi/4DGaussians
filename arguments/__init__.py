@@ -106,6 +106,7 @@ class ModelHiddenParams(ParamGroup):
         self.control_input_dim = 6
         self.control_hidden_dim = 64
         self.control_use_pe = False
+        self.control_num_frequencies = 4
         self.control_activation = 'relu'
 
         

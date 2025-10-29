@@ -83,7 +83,7 @@ class ControlEncoder(nn.Module):
             if isinstance(m, nn.Linear):
                 init.xavier_uniform_(m.weight, gain=1.0)
                 if m.bias is not None:
-                    init.zeros_(m.bias, 0.0)
+                    init.zeros_(m.bias)
                     
     def position_encoding(self, control_vec):
         """
