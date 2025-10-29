@@ -510,8 +510,12 @@ class GaussianModel:
         scales = self._scaling.detach()
         rotations = self._rotation.detach()
         opacity = self._opacity.detach()
-        time =  torch.tensor(0).to("cuda").repeat(means3D.shape[0],1)
-        means3D_deform, scales_deform, rotations_deform, _ = self._deformation(means3D, scales, rotations, opacity, time)
+        shs = self.get_features.detach()
+        
+        control_dim = getattr(self._deformation.control_encoder, 'input_dim', 6)
+        control_vec = torch.zeros(means3D.shape[0], control_dim).to("cuda")
+        
+        means3D_deform, scales_deform, rotations_deform, _, _ = self._deformation(means3D, scales, rotations, opacity, shs, control_vec)
         position_error = (means3D_deform - means3D)**2
         rotation_error = (rotations_deform - rotations)**2 
         scaling_erorr = (scales_deform - scales)**2

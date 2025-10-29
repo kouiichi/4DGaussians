@@ -18,6 +18,8 @@ from typing import NamedTuple
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
 from scene.hyper_loader import Load_hyper_data, format_hyper_data
+from scene.toyarm_dataset import ToyArmDataset, format_toyarm_infos
+
 import torchvision.transforms as transforms
 import copy
 from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
@@ -42,6 +44,7 @@ class CameraInfo(NamedTuple):
     width: int
     height: int
     time : float
+    control_vec : np.array
     mask: np.array
    
 class SceneInfo(NamedTuple):
@@ -116,7 +119,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image = PILtoTorch(image,None)
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                               image_path=image_path, image_name=image_name, width=width, height=height,
-                              time = float(idx/len(cam_extrinsics)), mask=None) # default by monocular settings.
+                              time = float(idx/len(cam_extrinsics)), control_vec=None, mask=None) # default by monocular settings.
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -254,7 +257,7 @@ def generateCamerasFromTransforms(path, template_transformsfile, extension, maxt
         FovX = fovx
         cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                             image_path=None, image_name=None, width=image.shape[1], height=image.shape[2],
-                            time = time, mask=None))
+                            time = time, control_vec=None, mask=None))
     return cam_infos
 def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png", mapper = {}):
     cam_infos = []
@@ -292,7 +295,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                             image_path=image_path, image_name=image_name, width=image.shape[1], height=image.shape[2],
-                            time = time, mask=None))
+                            time = time, control_vec=None, mask=None))
             
     return cam_infos
 def read_timeline(path):
@@ -632,11 +635,52 @@ def readMultipleViewinfos(datadir,llffhold=8):
                            ply_path=ply_path)
     return scene_info
 
+
+def readToyArmInfo(datadir, eval=False):
+    train_dataset = ToyArmDataset(datadir, split="train", preload_images=False)
+    test_dataset = ToyArmDataset(datadir, split="test", preload_images=False)
+    
+    train_cam_infos = format_toyarm_infos(train_dataset, "train")
+    test_cam_infos = format_toyarm_infos(test_dataset, "test")
+    
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+    
+    ply_path = os.path.join(datadir, "points3d.ply")
+    if not os.path.exists(ply_path):
+        print(f"Generating initial point cloud at {ply_path}...")
+        num_pts = 10000
+        xyz = np.random.uniform(-1.0, 1.0, (num_pts, 3)).astype(np.float32)
+        colors = np.ones((num_pts, 3), dtype=np.float32) * 0.5
+        normals = np.zeros((num_pts, 3), dtype=np.float32)
+        
+        pcd = BasicPointCloud(points=xyz, colors=colors, normals=normals)
+        storePly(ply_path, xyz, colors)
+    else:
+        pcd = fetchPly(ply_path)
+    
+    video_cam_infos = test_dataset.video_cam_infos
+    
+    max_time = train_dataset.max_time
+
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        video_cameras=video_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+        maxtime=max_time
+    )
+    
+    return scene_info
+        
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender" : readNerfSyntheticInfo,
     "dynerf" : readdynerfInfo,
     "nerfies": readHyperDataInfos,  # NeRFies & HyperNeRF dataset proposed by [https://github.com/google/hypernerf/releases/tag/v0.1]
     "PanopticSports" : readPanopticSportsinfos,
-    "MultipleView": readMultipleViewinfos
+    "MultipleView": readMultipleViewinfos,
+    "ToyArm": readToyArmInfo,
 }

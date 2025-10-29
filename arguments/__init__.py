@@ -74,13 +74,13 @@ class PipelineParams(ParamGroup):
 class ModelHiddenParams(ParamGroup):
     def __init__(self, parser):
         self.net_width = 64 # width of deformation MLP, larger will increase the rendering quality and decrase the training/rendering speed.
-        self.timebase_pe = 4 # useless
+        self.timebase_pe = 4 # [DEPRECATED] legacy parameter from time-based architecture
         self.defor_depth = 1 # depth of deformation MLP, larger will increase the rendering quality and decrase the training/rendering speed.
         self.posebase_pe = 10 # useless
         self.scale_rotation_pe = 2 # useless
         self.opacity_pe = 2 # useless
-        self.timenet_width = 64 # useless
-        self.timenet_output = 32 # useless
+        self.timenet_width = 64 # [DEPRECATED] legacy time encoder hidden width, replaced by control_encoder
+        self.timenet_output = 32 # [DEPRECATED] legacy time encoder output dim, kept for compatibility but unused
         self.bounds = 1.6 
         self.plane_tv_weight = 0.0001 # TV loss of spatial grid
         self.time_smoothness_weight = 0.01 # TV loss of temporal grid
@@ -102,6 +102,12 @@ class ModelHiddenParams(ParamGroup):
         self.grid_pe=0 # useless, I was trying to add positional encoding to hexplane's features
         self.static_mlp=False # useless
         self.apply_rotation=False # useless
+        
+        self.control_input_dim = 6
+        self.control_hidden_dim = 64
+        self.control_use_pe = False
+        self.control_num_frequencies = 4
+        self.control_activation = 'relu'
 
         
         super().__init__(parser, "ModelHiddenParams")

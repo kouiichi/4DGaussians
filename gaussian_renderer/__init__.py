@@ -50,9 +50,25 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             debug=pipe.debug
         )
         time = torch.tensor(viewpoint_camera.time).to(means3D.device).repeat(means3D.shape[0],1)
+        if hasattr(viewpoint_camera, 'control_vec') and viewpoint_camera.control_vec is not None:
+            control_vec = viewpoint_camera.control_vec.to(means3D.device)
+            if control_vec.dim() == 1:
+                control_vec = control_vec.unsqueeze(0)  # [6] -> [1, 6]
+            control_vec = control_vec.repeat(means3D.shape[0], 1)  # [1, 6] -> [N, 6]
+        else:
+            control_vec = torch.zeros(means3D.shape[0], 6, device=means3D.device)
     else:
         raster_settings = viewpoint_camera['camera']
         time=torch.tensor(viewpoint_camera['time']).to(means3D.device).repeat(means3D.shape[0],1)
+        control_vec = viewpoint_camera.get('control_vec', None)
+        if control_vec is None:
+            control_vec = torch.zeros(means3D.shape[0], 6, device=means3D.device)
+        else:
+            control_vec = control_vec.to(means3D.device)
+            if control_vec.dim() == 1:
+                control_vec = control_vec.unsqueeze(0)
+            if control_vec.shape[0] == 1:
+                control_vec = control_vec.repeat(means3D.shape[0], 1)
         
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -86,7 +102,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         #                                                                  time[deformation_point])
         means3D_final, scales_final, rotations_final, opacity_final, shs_final = pc._deformation(means3D, scales, 
                                                                  rotations, opacity, shs,
-                                                                 time)
+                                                                 control_vec)
     else:
         raise NotImplementedError
 
