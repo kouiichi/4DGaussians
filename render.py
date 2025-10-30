@@ -53,12 +53,14 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     gt_list = []
     render_list = []
     print("point nums:",gaussians._xyz.shape[0])
+    
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         if idx == 0:time1 = time()
         
-        rendering = render(view, gaussians, pipeline, background,cam_type=cam_type)["render"]
+        rendering = render(view, gaussians, pipeline, background, cam_type=cam_type)["render"]
         render_images.append(to8b(rendering).transpose(1,2,0))
         render_list.append(rendering)
+        
         if name in ["train", "test"]:
             if cam_type != "PanopticSports":
                 gt = view.original_image[0:3, :, :]
@@ -75,6 +77,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     
     imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'video_rgb.mp4'), render_images, fps=30)
+
+
 def render_sets(dataset : ModelParams, hyperparam, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, skip_video: bool):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree, hyperparam)

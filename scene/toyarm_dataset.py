@@ -44,12 +44,12 @@ class ToyArmDataset(Dataset):
         self.preload_images = preload_images
         
         if train_cameras is None:
-            train_cameras = list(range(10)) # 0-9 for training
+            train_cameras = list(range(4)) # 0-3 for training
         if test_cameras is None:
-            test_cameras = [10, 11] # 10-11 for testing
+            test_cameras = [10] # 10-11 for testing
             
         if train_samples is None:
-            train_samples = list(range(8)) # 0-7 for training
+            train_samples = list(range(6)) # 0-5 for training
         if test_samples is None:
             test_samples = [8, 9] # 8-9 for testing
             
@@ -66,8 +66,8 @@ class ToyArmDataset(Dataset):
             print(f"[Warning] Preloading {len(self.frames)} images to memory...")
             self._preload_all_images()
             
-        if split == "test":
-            self.video_cam_infos = self._get_video_cam_infos()
+        # if split == "test":
+        #    self.video_cam_infos = self._get_video_cam_infos()
             
     def _load_metadata(self):
         transforms_path = os.path.join(self.datadir, "transforms.json")
@@ -112,9 +112,9 @@ class ToyArmDataset(Dataset):
         self.joint_range = self.joint_max - self.joint_min
         
         all_times = [frame['time'] for frame in self.frames_meta]
-        self.time_min = min(all_times)
-        self.time_max = max(all_times)
-        self.time_range = self.time_max - self.time_min
+        self.min_time = min(all_times)
+        self.max_time = max(all_times)
+        self.time_range = self.max_time - self.min_time
 
     def _filter_frames(self):
         self.frames = []
@@ -128,7 +128,7 @@ class ToyArmDataset(Dataset):
                     self.frames.append(frame)
             
             elif self.split == "test":
-                if cam_idx in self.test_cameras or sample_idx in self.test_samples:
+                if cam_idx in self.test_cameras and sample_idx in self.test_samples:
                     self.frames.append(frame)
             
             elif self.split == "video":
@@ -203,37 +203,21 @@ class ToyArmDataset(Dataset):
         return len(self.frames)
     
     def __getitem__(self, index):
-        """
-        Get a single data sample.
-        
-        Returns:
-            tuple: (image, pose, time, control_vec)
-                - image: torch.Tensor [3, H, W]
-                - pose: tuple (R, T) where R is [3,3], T is [3,]
-                - time: float
-                - control_vec: torch.Tensor [6,]
-        """
         frame = self.frames[index]
+        
+        # Load image on demand
         image = self._load_image(index)
+        
+        # Get camera parameters
         R, T = self._get_camera_params(index)
         time = frame['time']
         control_vec = self._normalize_control_vec(frame['joint_pos'])
         
-        return image, (R, T), time, control_vec
-    
-    def get_camera_info(self, index):
-        frame = self.frames[index]
-        
-        image = self._load_image(index)
-        R, T = self._get_camera_params(index)
-        
-        time = frame['time']
-        
-        control_vec = self._normalize_control_vec(frame['joint_pos'])
-        
+        # Get paths
         image_path = os.path.join(self.datadir, frame['file_path'])
         image_name = Path(image_path).stem
         
+        # Create CameraInfo
         cam_info = CameraInfo(
             uid=index,
             R=R,
@@ -252,6 +236,7 @@ class ToyArmDataset(Dataset):
         
         return cam_info
     
+    """
     def _get_video_cam_infos(self):
         # Select first camera for video rendering
         fixed_camera_idx = self.train_cameras[0] if len(self.train_cameras) > 0 else 0
@@ -302,6 +287,7 @@ class ToyArmDataset(Dataset):
             video_cam_infos.append(cam_info)
         
         return video_cam_infos
+    """
     
     def load_pose(self, index):
         return self._get_camera_params(index)
@@ -315,7 +301,32 @@ def format_toyarm_infos(dataset, split):
     cameras = []
     
     for idx in tqdm(range(len(dataset)), desc=f"Formatting {split} camera infos"):
-        cam_info = dataset.get_camera_info(idx)
+        frame = dataset.frames[idx]
+        
+        # Get camera parameters WITHOUT loading image
+        R, T = dataset._get_camera_params(idx)
+        time = frame['time']
+        control_vec = dataset._normalize_control_vec(frame['joint_pos'])
+        
+        image_path = os.path.join(dataset.datadir, frame['file_path'])
+        image_name = Path(image_path).stem
+        
+        # Create CameraInfo with placeholder image (will be loaded lazily)
+        cam_info = CameraInfo(
+            uid=idx,
+            R=R,
+            T=T,
+            FovY=dataset.FovY,
+            FovX=dataset.FovX,
+            image=None,  # Placeholder - image will be loaded lazily during training
+            image_path=image_path,
+            image_name=image_name,
+            width=dataset.width,
+            height=dataset.height,
+            time=time,
+            control_vec=control_vec,
+            mask=None
+        )
         cameras.append(cam_info)
         
     return cameras

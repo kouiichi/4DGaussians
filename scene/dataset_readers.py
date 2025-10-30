@@ -637,11 +637,14 @@ def readMultipleViewinfos(datadir,llffhold=8):
 
 
 def readToyArmInfo(datadir, eval=False):
-    train_dataset = ToyArmDataset(datadir, split="train", preload_images=False)
-    test_dataset = ToyArmDataset(datadir, split="test", preload_images=False)
+    # train_dataset = ToyArmDataset(datadir, split="train", preload_images=False)
+    # test_dataset = ToyArmDataset(datadir, split="test", preload_images=False)
     
-    train_cam_infos = format_toyarm_infos(train_dataset, "train")
-    test_cam_infos = format_toyarm_infos(test_dataset, "test")
+    train_cam_infos = ToyArmDataset(datadir, split="train", preload_images=False)
+    test_cam_infos = ToyArmDataset(datadir, split="test", preload_images=False)
+    
+    video_cam_infos = copy.deepcopy(test_cam_infos)
+    video_cam_infos.split="video"
     
     nerf_normalization = getNerfppNorm(train_cam_infos)
     
@@ -657,10 +660,9 @@ def readToyArmInfo(datadir, eval=False):
         storePly(ply_path, xyz, colors)
     else:
         pcd = fetchPly(ply_path)
+
     
-    video_cam_infos = test_dataset.video_cam_infos
-    
-    max_time = train_dataset.max_time
+    max_time = train_cam_infos.max_time
 
     scene_info = SceneInfo(
         point_cloud=pcd,
