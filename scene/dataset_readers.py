@@ -18,7 +18,7 @@ from typing import NamedTuple
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
 from scene.hyper_loader import Load_hyper_data, format_hyper_data
-from scene.toyarm_dataset import ToyArmDataset, format_toyarm_infos
+from scene.toyarm_dataset import ToyArmDataset
 
 import torchvision.transforms as transforms
 import copy
@@ -637,14 +637,12 @@ def readMultipleViewinfos(datadir,llffhold=8):
 
 
 def readToyArmInfo(datadir, eval=False):
-    # train_dataset = ToyArmDataset(datadir, split="train", preload_images=False)
-    # test_dataset = ToyArmDataset(datadir, split="test", preload_images=False)
-    
     train_cam_infos = ToyArmDataset(datadir, split="train", preload_images=False)
     test_cam_infos = ToyArmDataset(datadir, split="test", preload_images=False)
-    
-    video_cam_infos = copy.deepcopy(test_cam_infos)
-    video_cam_infos.split="video"
+
+    # video_cam_infos = copy.deepcopy(train_cam_infos)
+    # video_cam_infos.split="video"
+    video_cam_infos =ToyArmDataset(datadir, split="video", preload_images=False)
     
     nerf_normalization = getNerfppNorm(train_cam_infos)
     

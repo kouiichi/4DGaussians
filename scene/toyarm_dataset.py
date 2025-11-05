@@ -44,19 +44,21 @@ class ToyArmDataset(Dataset):
         self.preload_images = preload_images
         
         if train_cameras is None:
-            train_cameras = list(range(4)) # 0-3 for training
+            train_cameras = list(range(0, 10))
         if test_cameras is None:
-            test_cameras = [10] # 10-11 for testing
+            test_cameras = [11]
             
         if train_samples is None:
-            train_samples = list(range(6)) # 0-5 for training
+            train_samples = [1]
         if test_samples is None:
-            test_samples = [8, 9] # 8-9 for testing
+            test_samples = [2]
             
         self.train_cameras = train_cameras
         self.test_cameras = test_cameras
         self.train_samples = train_samples
         self.test_samples = test_samples
+        self.video_cameras = [1]
+        self.video_samples = train_samples
         
         self._load_metadata()
         
@@ -115,6 +117,7 @@ class ToyArmDataset(Dataset):
         self.min_time = min(all_times)
         self.max_time = max(all_times)
         self.time_range = self.max_time - self.min_time
+        print(f"  Time range: [{self.min_time}, {self.max_time}]")
 
     def _filter_frames(self):
         self.frames = []
@@ -132,7 +135,8 @@ class ToyArmDataset(Dataset):
                     self.frames.append(frame)
             
             elif self.split == "video":
-                self.frames.append(frame)
+                if cam_idx in self.video_cameras and sample_idx in self.video_samples:
+                    self.frames.append(frame)
         
         print(f"  Filtered to {len(self.frames)} frames for {self.split} split")
     
@@ -147,6 +151,12 @@ class ToyArmDataset(Dataset):
             test_samples = sorted(set([f['sample_idx'] for f in self.frames]))
             print(f"    Test cameras: {test_cams}")
             print(f"    Test samples: {test_samples}")
+            
+        elif self.split == "video":
+            video_cams = sorted(set([f['camera_idx'] for f in self.frames]))
+            video_samples = sorted(set([f['sample_idx'] for f in self.frames]))
+            print(f"    Video cameras: {video_cams}")
+            print(f"    Video samples: {video_samples}")        
                 
     def _preload_all_images(self):
         self.preloaded_images = {}
@@ -188,10 +198,13 @@ class ToyArmDataset(Dataset):
         transform_matrix = np.array(camera_meta['transform_matrix'], dtype=np.float32)
         c2w = transform_matrix
         w2c = np.linalg.inv(c2w)
-        
-        R = np.transpose(w2c[:3, :3])
-        T = w2c[:3, 3]
-        
+
+        # R = np.transpose(w2c[:3, :3])
+        # T = w2c[:3, 3]
+        R = -np.transpose(w2c[:3,:3])
+        R[:,0] = -R[:,0]
+        T = -w2c[:3, 3]
+
         return R, T
     
     def _normalize_control_vec(self, joint_pos):
@@ -236,97 +249,10 @@ class ToyArmDataset(Dataset):
         
         return cam_info
     
-    """
-    def _get_video_cam_infos(self):
-        # Select first camera for video rendering
-        fixed_camera_idx = self.train_cameras[0] if len(self.train_cameras) > 0 else 0
-        
-        # Find all frames for this camera
-        video_frames = [
-            (i, f) for i, f in enumerate(self.frames) 
-            if f['camera_idx'] == fixed_camera_idx
-        ]
-        
-        # Sort by time and sample_idx
-        video_frames = sorted(video_frames, key=lambda x: (x[1]['time'], x[1]['sample_idx']))
-        
-        # Limit to reasonable number for video
-        max_video_frames = 100
-        if len(video_frames) > max_video_frames:
-            step = len(video_frames) // max_video_frames
-            video_frames = video_frames[::step][:max_video_frames]
-        
-        print(f"    Selected {len(video_frames)} frames for video rendering")
-        
-        # Generate CameraInfo for each video frame
-        video_cam_infos = []
-        for idx, (orig_idx, frame) in enumerate(video_frames):
-            image = self._load_image(orig_idx)
-            R, T = self._get_camera_params(orig_idx)
-            time = frame['time']
-            control_vec = self._normalize_control_vec(frame['joint_pos'])
-            
-            image_path = os.path.join(self.datadir, frame['file_path'])
-            
-            cam_info = CameraInfo(
-                uid=idx,
-                R=R,
-                T=T,
-                FovY=self.FovY,
-                FovX=self.FovX,
-                image=image,
-                image_path=image_path,
-                image_name=f"video_{idx:04d}",
-                width=self.width,
-                height=self.height,
-                time=time,
-                control_vec=control_vec,
-                mask=None
-            )
-            
-            video_cam_infos.append(cam_info)
-        
-        return video_cam_infos
-    """
-    
     def load_pose(self, index):
         return self._get_camera_params(index)
     
     def load_control_vec(self, index):
         frame = self.frames[index]
         return self._normalize_control_vec(frame['joint_pos'])
-    
 
-def format_toyarm_infos(dataset, split):
-    cameras = []
-    
-    for idx in tqdm(range(len(dataset)), desc=f"Formatting {split} camera infos"):
-        frame = dataset.frames[idx]
-        
-        # Get camera parameters WITHOUT loading image
-        R, T = dataset._get_camera_params(idx)
-        time = frame['time']
-        control_vec = dataset._normalize_control_vec(frame['joint_pos'])
-        
-        image_path = os.path.join(dataset.datadir, frame['file_path'])
-        image_name = Path(image_path).stem
-        
-        # Create CameraInfo with placeholder image (will be loaded lazily)
-        cam_info = CameraInfo(
-            uid=idx,
-            R=R,
-            T=T,
-            FovY=dataset.FovY,
-            FovX=dataset.FovX,
-            image=None,  # Placeholder - image will be loaded lazily during training
-            image_path=image_path,
-            image_name=image_name,
-            width=dataset.width,
-            height=dataset.height,
-            time=time,
-            control_vec=control_vec,
-            mask=None
-        )
-        cameras.append(cam_info)
-        
-    return cameras
