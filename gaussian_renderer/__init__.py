@@ -15,7 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 from time import time as get_time
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, stage="fine", cam_type=None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, stage="fine", cam_type=None, is_training=False, iteration=0):
     """
     Render the scene. 
     
@@ -113,6 +113,22 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     scales_final = pc.scaling_activation(scales_final)
     rotations_final = pc.rotation_activation(rotations_final)
     opacity = pc.opacity_activation(opacity_final)
+    
+    """DropGaussian Implementation"""
+    # DropGaussian 
+    if is_training and "fine" in stage:
+        max_drop_rate = 0.2
+        max_iterations = 12000
+        current_drop_rate = max_drop_rate * min(iteration / max_iterations, 1.0)
+        
+        num_gaussians = opacity.shape[0]
+        compensation = torch.ones(num_gaussians, dtype=torch.float32, device="cuda")
+    
+        dropout_layer = torch.nn.Dropout(p=current_drop_rate)
+        compensation = dropout_layer(compensation)
+        
+        opacity = opacity * compensation.unsqueeze(1)
+    
     # print(opacity.max())
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.

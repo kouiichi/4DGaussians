@@ -44,7 +44,7 @@ class ToyArmDataset(Dataset):
         self.preload_images = preload_images
         
         if train_cameras is None:
-            train_cameras = list(range(0, 10))
+            train_cameras = list(range(0, 11))
         if test_cameras is None:
             test_cameras = [11]
             
@@ -57,7 +57,7 @@ class ToyArmDataset(Dataset):
         self.test_cameras = test_cameras
         self.train_samples = train_samples
         self.test_samples = test_samples
-        self.video_cameras = [1]
+        self.video_cameras = [0]
         self.video_samples = train_samples
         
         self._load_metadata()
@@ -121,7 +121,7 @@ class ToyArmDataset(Dataset):
 
     def _filter_frames(self):
         self.frames = []
-
+        """
         for frame in self.frames_meta:
             cam_idx = frame['camera_idx']
             sample_idx = frame['sample_idx']
@@ -137,26 +137,44 @@ class ToyArmDataset(Dataset):
             elif self.split == "video":
                 if cam_idx in self.video_cameras and sample_idx in self.video_samples:
                     self.frames.append(frame)
+        """
+        for frame in self.frames_meta:
+            cam_idx = frame['camera_idx']
+
+            if self.split == "train":
+               if cam_idx in self.train_cameras:
+                    self.frames.append(frame)
+            
+            elif self.split == "test":
+                if cam_idx in self.test_cameras:
+                    self.frames.append(frame)
+            
+            elif self.split == "video":
+                if cam_idx in self.video_cameras:
+                    self.frames.append(frame)
         
         print(f"  Filtered to {len(self.frames)} frames for {self.split} split")
     
         if self.split == "train":
             train_cams = sorted(set([f['camera_idx'] for f in self.frames]))
-            train_samples = sorted(set([f['sample_idx'] for f in self.frames]))
+            # train_samples = sorted(set([f['sample_idx'] for f in self.frames]))
             print(f"    Train cameras: {train_cams}")
-            print(f"    Train samples: {train_samples}")
+            # print(f"    Train samples: {train_samples}")
         
         elif self.split == "test":
             test_cams = sorted(set([f['camera_idx'] for f in self.frames]))
-            test_samples = sorted(set([f['sample_idx'] for f in self.frames]))
+            # test_samples = sorted(set([f['sample_idx'] for f in self.frames]))
             print(f"    Test cameras: {test_cams}")
-            print(f"    Test samples: {test_samples}")
+            # print(f"    Test samples: {test_samples}")
             
         elif self.split == "video":
             video_cams = sorted(set([f['camera_idx'] for f in self.frames]))
-            video_samples = sorted(set([f['sample_idx'] for f in self.frames]))
+            # video_samples = sorted(set([f['sample_idx'] for f in self.frames]))
             print(f"    Video cameras: {video_cams}")
-            print(f"    Video samples: {video_samples}")        
+            # print(f"    Video samples: {video_samples}")  
+        
+        unique_cams = sorted({f['camera_idx'] for f in self.frames})
+        self.poses = unique_cams if unique_cams else [0]      
                 
     def _preload_all_images(self):
         self.preloaded_images = {}
@@ -196,15 +214,13 @@ class ToyArmDataset(Dataset):
         camera_meta = self.cameras_meta[camera_idx]
         
         transform_matrix = np.array(camera_meta['transform_matrix'], dtype=np.float32)
+        
         c2w = transform_matrix
         w2c = np.linalg.inv(c2w)
-
-        # R = np.transpose(w2c[:3, :3])
-        # T = w2c[:3, 3]
-        R = -np.transpose(w2c[:3,:3])
-        R[:,0] = -R[:,0]
-        T = -w2c[:3, 3]
-
+        
+        R = np.transpose(w2c[:3, :3])
+        T = w2c[:3, 3]
+        
         return R, T
     
     def _normalize_control_vec(self, joint_pos):
@@ -224,7 +240,8 @@ class ToyArmDataset(Dataset):
         # Get camera parameters
         R, T = self._get_camera_params(index)
         time = frame['time']
-        control_vec = self._normalize_control_vec(frame['joint_pos'])
+        # control_vec = self._normalize_control_vec(frame['joint_pos'])
+        control_vec = frame['joint_pos']
         
         # Get paths
         image_path = os.path.join(self.datadir, frame['file_path'])
