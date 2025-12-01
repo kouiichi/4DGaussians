@@ -13,6 +13,7 @@ import random
 import os, sys
 import torch
 import cv2
+import traceback
 from random import randint
 from utils.loss_utils import l1_loss, ssim, l2_loss, lpips_loss, flow_loss
 from gaussian_renderer import render, network_gui
@@ -31,10 +32,14 @@ import lpips
 from utils.scene_utils import render_training_image
 from time import time
 import copy
-from gmflow.gmflow import build_gmflow
-from gmflow.config import get_cfg as get_gmflow_cfg
-from utils.flow_utils import calculate_gs_flow, flow_to_image
-
+from GSFlow import (
+    FlowComputation, 
+    create_flow_computer, 
+    create_visualization_manager,
+    group_cameras_by_view,
+    sample_consecutive_frames_same_camera
+)
+from utils.sampler_utils import sample_mixed_batch_from_pool
 
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
@@ -43,31 +48,10 @@ try:
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
-    
-
-def build_frame_pair_index(cameras):
-    from collections import defaultdict
-    
-    camera_frames = defaultdict(list)
-    for cam in cameras:
-        cam_idx = getattr(cam, 'camera_idx', 0)
-        camera_frames[cam_idx].append((cam.uid, cam.time))
-        
-    for cam_idx in camera_frames:
-        camera_frames[cam_idx].sort(key=lambda x: x[1])
-        
-    uid_to_next = {}
-    for cam_idx, frames in camera_frames.items():
-        for i in range(len(frames) - 1):
-            current_uid = frames[i][0]
-            next_uid = frames[i + 1][0]
-            uid_to_next[current_uid] = next_uid
-    return uid_to_next
-
 
 def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations, 
                          checkpoint_iterations, checkpoint, debug_from,
-                         gaussians, scene, stage, tb_writer, train_iter,timer):
+                         gaussians, scene, stage, tb_writer, train_iter,timer, flow_computer=None, flow_vis_manager=None):
     first_iter = 0
 
     gaussians.training_setup(opt)
@@ -107,7 +91,21 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
     final_iter = train_iter
     
-    progress_bar = tqdm(range(first_iter, final_iter), desc="Training progress")
+    # 添加阶段信息输出
+    print(f"\n{'='*80}")
+    print(f"开始 {stage.upper()} 阶段训练")
+    print(f"{'='*80}")
+    print(f"迭代范围: {first_iter} -> {final_iter}")
+    print(f"总迭代数: {final_iter - first_iter + 1}")
+    if stage == "fine":
+        print(f"光流Loss: {'启用' if opt.use_flow_loss else '禁用'}")
+        if opt.use_flow_loss:
+            print(f"  - 开始迭代: {opt.flow_loss_start_iter}")
+            print(f"  - 权重: {opt.lambda_flow}")
+            print(f"  - 可视化间隔: {opt.flow_vis_interval}")
+    print(f"{'='*80}\n")
+    
+    progress_bar = tqdm(range(first_iter, final_iter), desc=f"{stage} stage")
     first_iter += 1
     # lpips_model = lpips.LPIPS(net="alex").cuda()
     video_cams = scene.getVideoCameras()
@@ -198,16 +196,24 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 loader = iter(viewpoint_stack_loader)
 
         else:
-            idx = 0
-            viewpoint_cams = []
-
-            while idx < batch_size :    
-                    
-                viewpoint_cam = viewpoint_stack.pop(randint(0,len(viewpoint_stack)-1))
-                if not viewpoint_stack :
-                    viewpoint_stack =  temp_list.copy()
-                viewpoint_cams.append(viewpoint_cam)
-                idx +=1
+            # 使用混合采样策略A: 部分样本用于光流，部分样本随机采样；flow_pair_ratio: 用于光流的样本比例
+            if stage == "fine" and opt.use_flow_loss:
+                viewpoint_cams = sample_mixed_batch_from_pool(
+                    viewpoint_stack, 
+                    temp_list, 
+                    batch_size, 
+                    flow_pair_ratio=0.5
+                )
+            else:# 原有的完全随机采样
+                idx = 0
+                viewpoint_cams = []
+                while idx < batch_size:
+                    viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+                    if not viewpoint_stack:
+                        viewpoint_stack = temp_list.copy()
+                    viewpoint_cams.append(viewpoint_cam)
+                    idx += 1
+            
             if len(viewpoint_cams) == 0:
                 continue
         # print(len(viewpoint_cams))     
@@ -295,6 +301,86 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         psnr_ = psnr(image_tensor, gt_image_tensor).mean().double()
         # norm
         
+        # Optical Flow Loss (only in fine stage)
+        Lflow = None
+        if stage == "fine" and opt.use_flow_loss and iteration > opt.flow_loss_start_iter and flow_computer is not None:
+            # 将当前batch的相机按相机ID分组
+            camera_groups = group_cameras_by_view(viewpoint_cams)
+            frame_pairs = sample_consecutive_frames_same_camera(camera_groups, num_pairs=1)
+            
+            if len(frame_pairs) > 0:
+                try:
+                    # 使用采样到的同一相机的连续帧
+                    viewpoint_cam_t, viewpoint_cam_t1 = frame_pairs[0]
+                    
+                    render_pkg_t = render(viewpoint_cam_t, gaussians, pipe, background, 
+                                         stage=stage, cam_type=scene.dataset_type, 
+                                         return_flow_data=True)
+                    
+                    render_pkg_t1 = render(viewpoint_cam_t1, gaussians, pipe, background, 
+                                          stage=stage, cam_type=scene.dataset_type, 
+                                          return_flow_data=True)
+                    
+                    required_keys = ["proj_2D", "gs_per_pixel", "weight_per_gs_pixel", 
+                                   "conic_2D", "conic_2D_inv", "x_mu"]
+                    
+                    missing_keys_t = [k for k in required_keys if k not in render_pkg_t or render_pkg_t[k] is None]
+                    missing_keys_t1 = [k for k in required_keys if k not in render_pkg_t1 or render_pkg_t1[k] is None]
+                    
+                    if missing_keys_t or missing_keys_t1:
+                        continue  # 跳过这次光流计算
+                    
+                    # Check if flow data is available
+                    if "proj_2D" in render_pkg_t and "proj_2D" in render_pkg_t1:
+                        # 获取图像用于GMFlow GT计算
+                        gt_image_t = viewpoint_cam_t.original_image.cuda() if scene.dataset_type != "PanopticSports" else viewpoint_cam_t['image'].cuda()
+                        gt_image_t1 = viewpoint_cam_t1.original_image.cuda() if scene.dataset_type != "PanopticSports" else viewpoint_cam_t1['image'].cuda()
+                        
+                        # 1. 计算GMFlow GT + 2. 计算GSFlow预测 + 3. 计算Loss
+                        try:
+                            flow_result = flow_computer.compute_flow_loss_with_gmflow(
+                                gt_image_t, 
+                                gt_image_t1,
+                                render_pkg_t,
+                                render_pkg_t1,
+                                lambda_flow=1.0,  # 这里设为1.0,外面再乘opt.lambda_flow
+                                loss_type='l1'
+                            )
+                        except Exception as flow_err:
+                            if iteration % 1000 == 0:  # 只在每1000次迭代输出一次错误
+                                print(f"\n❌ [Iter {iteration}] 光流计算失败: {type(flow_err).__name__}")
+                            continue  # 跳过这次光流计算
+                        
+                        Lflow = flow_result['raw_loss']  # 获取未加权的loss
+                        gs_flow = flow_result['flow_pred']  # 预测的光流
+                        flow_gt = flow_result['flow_gt']    # GMFlow的GT
+                        
+                        # 验证光流结果
+                        if torch.isnan(Lflow).any() or torch.isinf(Lflow).any():
+                            Lflow = None
+                            continue
+                        
+                        # 使用可视化管理器进行可视化（如果启用）
+                        if flow_vis_manager is not None and flow_vis_manager.should_visualize(iteration):
+                            try:
+                                flow_vis_manager.visualize_and_save(
+                                    iteration=iteration,
+                                    flow_pred=gs_flow,
+                                    flow_gt=flow_gt,
+                                    image_t=gt_image_t,
+                                    image_t1=gt_image_t1
+                                )
+                            except Exception as vis_err:
+                                print(f"⚠️ [Iter {iteration}] 光流可视化失败: {vis_err}")                      
+                
+                except Exception as e:
+                    # If flow computation fails, skip it
+                    if iteration % 1000 == 0:  # 只在每1000次迭代输出一次错误
+                        print(f"\n❌ [Iter {iteration}] 光流计算异常: {type(e).__name__} - {str(e)[:100]}")
+            else:
+                # 没有采样到有效的同一相机连续帧对，将光流loss设为0
+                Lflow = torch.tensor(0.0, device='cuda', dtype=torch.float32)
+        
         loss = Ll1
         if stage == "fine" and hyper.time_smoothness_weight != 0:
             # tv_loss = 0
@@ -303,85 +389,10 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         if opt.lambda_dssim != 0:
             ssim_loss = ssim(image_tensor,gt_image_tensor)
             loss += opt.lambda_dssim * (1.0-ssim_loss)
-        # if opt.lambda_lpips !=0:
-        #     lpipsloss = lpips_loss(image_tensor,gt_image_tensor,lpips_model)
-        #     loss += opt.lambda_lpips * lpipsloss
-  
-        # flow loss
-        Lflow = None
-        gs_flow_list = []
-        flow_2d_gt_list = []
-        flow_viewpoint_list = []
+        # 光流loss: 如果成功计算则加入，如果采样失败则Lflow=0也会加入（相当于不影响总loss）
+        if Lflow is not None:
+            loss += opt.lambda_flow * Lflow
         
-        if flownet is not None and stage == "fine":
-            num_valid = valid_flow_mask.sum().item()
-            if num_valid > 0:
-                H, W = gt_image_tensor.shape[-2], gt_image_tensor.shape[-1]
-                flow_losses = []
-                
-                flow_idx = 0
-                for batch_idx, viewpoint_cam in enumerate(viewpoint_cams):
-                    if not valid_flow_mask[batch_idx]:
-                        continue
-                    
-                    gt_image_t = gt_images[batch_idx]  # [1, C, H, W]
-                    next_gt_image_t = next_gt_images[batch_idx]  # [1, C, H, W] 
-                    
-                    # 1. calculate GT flow
-                    with torch.no_grad():
-                        flow_preds = flownet(gt_image_t * 255, next_gt_image_t * 255)
-                        
-                        flow_high = flow_preds[0]
-                        H_flow, W_flow = flow_high.shape[-2:]
-                        
-                        if (H_flow == H) and (W_flow == W):
-                            flow_2d_gt = flow_high.squeeze(0)  # [2, H, W]
-                        else:
-                            flow_2d_gt = torch.nn.functional.interpolate(flow_high, size=(H, W), mode="bilinear").squeeze(0)
-                            flow_2d_gt[0] *= float(W) / float(W_flow)
-                            flow_2d_gt[1] *= float(H) / float(H_flow)
-                        flow_2d_gt = flow_2d_gt.cuda()
-                        
-                    # 2. get control_vec of next frame
-                    next_uid = uid_to_next_uid[viewpoint_cam.uid]
-                    next_cam = uid_to_camera[next_uid]
-                    next_control_vec = next_cam.control_vec
-                    
-                    # 3. render with control_vec of next frame
-                    with torch.no_grad():
-                        render_next = render(viewpoint_cam, gaussians, pipe, background, 
-                                            stage=stage, cam_type=scene.dataset_type,
-                                            is_training=False,
-                                            override_control_vec=next_control_vec)
-                        next_proj_2D = render_next["proj_2D"]
-                        next_conic_2D = render_next["conic_2D"]
-                    
-                    # 4. calculate gs flow
-                    gs_flow = calculate_gs_flow(
-                        gs_per_pixel_list[flow_idx],
-                        weight_per_gs_pixel_list[flow_idx],
-                        next_conic_2D,
-                        conic_2D_inv_list[flow_idx],
-                        proj_2D_list[flow_idx],
-                        next_proj_2D,
-                        x_mu_list[flow_idx]
-                    )
-                    
-                    # 5. calculate gs loss
-                    gs_flow_list.append(gs_flow.detach().cpu())
-                    flow_2d_gt_list.append(flow_2d_gt.detach().cpu())
-                    flow_viewpoint_list.append(viewpoint_cam)
-                    
-                    flow_loss_val = flow_loss(gs_flow, flow_2d_gt.detach(), H, W)
-                    flow_losses.append(flow_loss_val)
-                    
-                    flow_idx += 1
-                
-                if len(flow_losses) > 0:
-                    Lflow = torch.stack(flow_losses).mean()
-                    loss = loss + opt.flow_loss_weight * Lflow
-             
-                    
         loss.backward()
         if torch.isnan(loss).any():
             print("loss is nan,end training, reexecv program now.")
@@ -397,9 +408,15 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             ema_psnr_for_log = 0.4 * psnr_ + 0.6 * ema_psnr_for_log
             total_point = gaussians._xyz.shape[0]
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}",
-                                          "psnr": f"{psnr_:.{2}f}",
-                                          "point":f"{total_point}"})
+                postfix_dict = {
+                    "Stage": stage,
+                    "Loss": f"{ema_loss_for_log:.{7}f}",
+                    "psnr": f"{psnr_:.{2}f}",
+                    "point": f"{total_point}"
+                }
+                if Lflow is not None and stage == "fine":
+                    postfix_dict["Lflow"] = f"{Lflow.item():.{5}f}"
+                progress_bar.set_postfix(postfix_dict)
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -468,13 +485,51 @@ def training(dataset, hyper, opt, pipe, testing_iterations, saving_iterations, c
     dataset.model_path = args.model_path
     timer = Timer()
     scene = Scene(dataset, gaussians, load_coarse=None)
+    
+    # 初始化光流计算模块
+    flow_computer = None
+    flow_vis_manager = None
+    
+    if opt.use_flow_loss:
+        print("\n" + "="*80)
+        print("初始化光流计算模块...")
+        print("="*80)
+        
+        # GMFlow checkpoint路径
+        gmflow_checkpoint = os.path.join(os.path.dirname(__file__), 
+                                        'gmflow/checkpoints/gmflow_sintel-0c07dcb3.pth')
+        
+        try:
+            flow_computer = create_flow_computer(
+                gmflow_checkpoint=gmflow_checkpoint,
+                device='cuda'
+            )
+            print(f"   ✅ 光流计算模块初始化成功- GMFlow checkpoint: {gmflow_checkpoint}")
+            
+            # 创建可视化管理器
+            vis_interval = opt.flow_vis_interval if hasattr(opt, 'flow_vis_interval') else 500
+            flow_vis_manager = create_visualization_manager(
+                flow_computer=flow_computer,
+                output_dir=scene.model_path,
+                vis_interval=vis_interval,
+                enable=True  # 可以添加参数控制是否启用
+            )
+            print(f"✅ 光流可视化管理器已初始化 (间隔: {vis_interval})")
+            
+        except Exception as e:
+            print(f"⚠️ 警告: 光流计算模块初始化失败: {e}")
+            flow_computer = None
+            flow_vis_manager = None
+        
+        print("="*80 + "\n")
+    
     timer.start()
     scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations,
                              checkpoint_iterations, checkpoint, debug_from,
-                             gaussians, scene, "coarse", tb_writer, opt.coarse_iterations,timer)
+                             gaussians, scene, "coarse", tb_writer, opt.coarse_iterations,timer, flow_computer, flow_vis_manager)
     scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations,
                          checkpoint_iterations, checkpoint, debug_from,
-                         gaussians, scene, "fine", tb_writer, opt.iterations,timer)
+                         gaussians, scene, "fine", tb_writer, opt.iterations,timer, flow_computer, flow_vis_manager)
 
 
 def prepare_output_and_logger(expname):    
@@ -578,7 +633,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
                 # print("sh feature",scene.gaussians.get_features.shape)
                 if tb_writer:
-                    tb_writer.add_scalar(stage + "/"+config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
+                    tb_writer.add_scalar(stage + "/"+config['name'] + '/loss_viewpoint - l1+flow_loss', l1_test, iteration)
                     tb_writer.add_scalar(stage+"/"+config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
 
         if tb_writer:
@@ -599,10 +654,9 @@ def setup_seed(seed):
      torch.backends.cudnn.deterministic = True
 if __name__ == "__main__":
     # Set up command line argument parser
-    # torch.set_default_tensor_type('torch.FloatTensor')
     torch.cuda.empty_cache()
     parser = ArgumentParser(description="Training script parameters")
-    setup_seed(6666)
+    setup_seed(6657)
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
@@ -611,10 +665,9 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    # parser.add_argument("--test_iterations", nargs="+", type=int, default=[3000, 7000, 14000])
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000, 16000, 17000, 18000, 19000, 20000])
-    # parser.add_argument("--save_iterations", nargs="+", type=int, default=[ 14000, 20000, 30_000, 45000, 60000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000])
+    parser.add_argument('--flow_vis_dir', nargs="+", type=str, default=None, help='Directory to save flow visualizations')
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[3000, 6000, 9000, 12000, 15000, 20000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 6000, 9000, 12000, 15000, 20000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)

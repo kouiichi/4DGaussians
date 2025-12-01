@@ -37,7 +37,7 @@ class FourDGSdataset(Dataset):
                 time = caminfo.time
                 control_vec = caminfo.control_vec if hasattr(caminfo, 'control_vec') else None
                 mask = caminfo.mask
-                camera_idx = caminfo.camera_idx
+                camera_idx = caminfo.camera_idx if hasattr(caminfo, 'camera_idx') else index
             return Camera(colmap_id=index,R=R,T=T,FoVx=FovX,FoVy=FovY,image=image,gt_alpha_mask=None,
                               image_name=f"{index}",uid=index,data_device=torch.device("cuda"),time=time,
                               control_vec=control_vec,mask=mask,camera_idx=camera_idx)

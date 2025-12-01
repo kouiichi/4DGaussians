@@ -113,7 +113,7 @@ def evaluate(model_paths):
             raise e
 
 if __name__ == "__main__":
-    device = torch.device("cuda:0")
+    device = torch.device("cuda:2")
     torch.cuda.set_device(device)
 
     # Set up command line argument parser

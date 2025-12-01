@@ -18,12 +18,13 @@ class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", time = 0, control_vec = None,
-                 mask = None, depth = None, camera_idx = 0
+                 mask = None, depth = None, camera_idx = None
                  ):
         super(Camera, self).__init__()
 
         self.uid = uid
         self.colmap_id = colmap_id
+        self.camera_idx = camera_idx if camera_idx is not None else colmap_id  # 真实相机ID
         self.R = R
         self.T = T
         self.FoVx = FoVx

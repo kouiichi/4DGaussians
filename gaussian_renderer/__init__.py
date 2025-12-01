@@ -15,8 +15,9 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 from time import time as get_time
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, stage="fine", 
-           cam_type = None, is_training = False, iteration = 0, override_control_vec = None):
+
+
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, stage="fine", cam_type=None, is_training=False, iteration=0, return_flow_data=False):
     """
     Render the scene. 
     
@@ -156,6 +157,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     # time3 = get_time()
+    # The flow-diff-gaussian-rasterization returns additional data for optical flow
     raster_output = rasterizer(
         means3D = means3D_final,
         means2D = means2D,
@@ -166,31 +168,40 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         rotations = rotations_final,
         cov3D_precomp = cov3D_precomp)
     
-    rendered_image = raster_output[0]
-    radii = raster_output[1]
-    depth = raster_output[2]
-    alpha = raster_output[3]
-    proj_2D = raster_output[4]
-    conic_2D = raster_output[5]
-    conic_2D_inv = raster_output[6]
-    gs_per_pixel = raster_output[7]
-    weight_per_gs_pixel = raster_output[8]
-    x_mu = raster_output[9]
+    # Unpack the output
+    if len(raster_output) == 10:
+        # Flow rasterizer returns: color, radii, depth, alpha, proj_2D, conic_2D, conic_2D_inv, gs_per_pixel, weight_per_gs_pixel, x_mu
+        rendered_image, radii, depth, alpha, proj_2D, conic_2D, conic_2D_inv, gs_per_pixel, weight_per_gs_pixel, x_mu = raster_output
+    else:
+        # Standard rasterizer returns only: color, radii, depth
+        rendered_image, radii, depth = raster_output
+        alpha = proj_2D = conic_2D = conic_2D_inv = gs_per_pixel = weight_per_gs_pixel = x_mu = None
+    
     # time4 = get_time()
     # print("rasterization:",time4-time3)
     # breakpoint()
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    return {"render": rendered_image,
-            "viewspace_points": screenspace_points,
-            "visibility_filter" : radii > 0,
-            "radii": radii,
-            "depth": depth,
+    
+    result = {
+        "render": rendered_image,
+        "viewspace_points": screenspace_points,
+        "visibility_filter": radii > 0,
+        "radii": radii,
+        "depth": depth
+    }
+    
+    # Store additional data needed for optical flow computation
+    if return_flow_data and proj_2D is not None:
+        result.update({
             "alpha": alpha,
             "proj_2D": proj_2D,
             "conic_2D": conic_2D,
             "conic_2D_inv": conic_2D_inv,
             "gs_per_pixel": gs_per_pixel,
             "weight_per_gs_pixel": weight_per_gs_pixel,
-            "x_mu": x_mu}
+            "x_mu": x_mu,
+        })
+    
+    return result
 

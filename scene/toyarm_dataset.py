@@ -26,7 +26,7 @@ class CameraInfo(NamedTuple):
     time : float
     control_vec : np.array
     mask: np.array
-    camera_idx: int
+    camera_idx: int  # 真实的相机ID (0-11)
 
 
 class ToyArmDataset(Dataset):
@@ -207,6 +207,7 @@ class ToyArmDataset(Dataset):
         # Get paths
         image_path = os.path.join(self.datadir, frame['file_path'])
         image_name = Path(image_path).stem
+        camera_idx = frame['camera_idx']  # 获取真实的相机ID
         
         # Create CameraInfo
         cam_info = CameraInfo(
@@ -223,7 +224,7 @@ class ToyArmDataset(Dataset):
             time=time,
             control_vec=control_vec,
             mask=None,
-            camera_idx=frame['camera_idx']
+            camera_idx=camera_idx
         )
         
         return cam_info

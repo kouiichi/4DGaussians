@@ -138,7 +138,7 @@ class OptimizationParams(ParamGroup):
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
         self.percent_dense = 0.01
-        self.lambda_dssim = 0
+        self.lambda_dssim = 0.2
         self.lambda_lpips = 0
         self.weight_constraint_init= 1
         self.weight_constraint_after = 0.2
@@ -157,6 +157,12 @@ class OptimizationParams(ParamGroup):
         self.opacity_threshold_fine_after = 0.005
         self.batch_size=1
         self.add_point=False
+        # Optical Flow Parameters
+        self.use_flow_loss = True
+        self.lambda_flow = 0.005
+        self.flow_loss_start_iter = 500
+        self.flow_vis_interval = 1000
+        
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
