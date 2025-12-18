@@ -15,7 +15,8 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 from time import time as get_time
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, stage="fine", cam_type=None, is_training=False, iteration=0):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, stage="fine", 
+           cam_type = None, is_training = False, iteration = 0, override_control_vec = None):
     """
     Render the scene. 
     
@@ -50,7 +51,12 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             debug=pipe.debug
         )
         time = torch.tensor(viewpoint_camera.time).to(means3D.device).repeat(means3D.shape[0],1)
-        if hasattr(viewpoint_camera, 'control_vec') and viewpoint_camera.control_vec is not None:
+        if override_control_vec is not None:
+            control_vec = override_control_vec.to(means3D.device)
+            if control_vec.dim() == 1:
+                control_vec = control_vec.unsqueeze(0)
+            control_vec = control_vec.repeat(means3D.shape[0], 1)
+        elif hasattr(viewpoint_camera, 'control_vec') and viewpoint_camera.control_vec is not None:
             control_vec = viewpoint_camera.control_vec.to(means3D.device)
             if control_vec.dim() == 1:
                 control_vec = control_vec.unsqueeze(0)  # [6] -> [1, 6]
@@ -115,10 +121,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     opacity = pc.opacity_activation(opacity_final)
     
     """DropGaussian Implementation"""
-    # DropGaussian 
+    
     if is_training and "fine" in stage:
         max_drop_rate = 0.2
-        max_iterations = 12000
+        max_iterations = 15000
         current_drop_rate = max_drop_rate * min(iteration / max_iterations, 1.0)
         
         num_gaussians = opacity.shape[0]
@@ -128,6 +134,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         compensation = dropout_layer(compensation)
         
         opacity = opacity * compensation.unsqueeze(1)
+    
     
     # print(opacity.max())
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
@@ -149,7 +156,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     # time3 = get_time()
-    rendered_image, radii, depth = rasterizer(
+    raster_output = rasterizer(
         means3D = means3D_final,
         means2D = means2D,
         shs = shs_final,
@@ -158,6 +165,17 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         scales = scales_final,
         rotations = rotations_final,
         cov3D_precomp = cov3D_precomp)
+    
+    rendered_image = raster_output[0]
+    radii = raster_output[1]
+    depth = raster_output[2]
+    alpha = raster_output[3]
+    proj_2D = raster_output[4]
+    conic_2D = raster_output[5]
+    conic_2D_inv = raster_output[6]
+    gs_per_pixel = raster_output[7]
+    weight_per_gs_pixel = raster_output[8]
+    x_mu = raster_output[9]
     # time4 = get_time()
     # print("rasterization:",time4-time3)
     # breakpoint()
@@ -167,5 +185,12 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             "viewspace_points": screenspace_points,
             "visibility_filter" : radii > 0,
             "radii": radii,
-            "depth":depth}
+            "depth": depth,
+            "alpha": alpha,
+            "proj_2D": proj_2D,
+            "conic_2D": conic_2D,
+            "conic_2D_inv": conic_2D_inv,
+            "gs_per_pixel": gs_per_pixel,
+            "weight_per_gs_pixel": weight_per_gs_pixel,
+            "x_mu": x_mu}
 

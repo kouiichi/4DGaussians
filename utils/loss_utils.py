@@ -65,3 +65,18 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
     else:
         return ssim_map.mean(1).mean(1).mean(1)
 
+
+def flow_loss(flow_pred, flow_gt, height, width):
+    flow_pred[0] /= height
+    flow_pred[1] /= width
+    # pred[0] /= width  
+    # pred[1] /= height
+    flow_pred = flow_pred.clamp(-1, 1)
+    
+    # gt[0] /= height
+    # gt[1] /= width
+    flow_gt[0] /= width
+    flow_gt[1] /= height
+    flow_gt = flow_gt.clamp(-1, 1)
+    
+    return l1_loss(flow_pred, flow_gt)

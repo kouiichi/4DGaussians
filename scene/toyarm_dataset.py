@@ -26,6 +26,7 @@ class CameraInfo(NamedTuple):
     time : float
     control_vec : np.array
     mask: np.array
+    camera_idx: int
 
 
 class ToyArmDataset(Dataset):
@@ -34,8 +35,6 @@ class ToyArmDataset(Dataset):
                  split="train",
                  train_cameras=None,
                  test_cameras=None,
-                 train_samples=None,
-                 test_samples=None,
                  ratio=1.0,
                  preload_images=False):
         self.datadir = os.path.expanduser(datadir)
@@ -44,22 +43,15 @@ class ToyArmDataset(Dataset):
         self.preload_images = preload_images
         
         if train_cameras is None:
-            train_cameras = list(range(0, 11))
+            # train_cameras = list(range(0, 11))
+            train_cameras = [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11]
         if test_cameras is None:
-            test_cameras = [11]
-            
-        if train_samples is None:
-            train_samples = [1]
-        if test_samples is None:
-            test_samples = [2]
+            test_cameras = [5]  
             
         self.train_cameras = train_cameras
         self.test_cameras = test_cameras
-        self.train_samples = train_samples
-        self.test_samples = test_samples
         self.video_cameras = [0]
-        self.video_samples = train_samples
-        
+   
         self._load_metadata()
         
         self._filter_frames()
@@ -67,9 +59,6 @@ class ToyArmDataset(Dataset):
         if self.preload_images:
             print(f"[Warning] Preloading {len(self.frames)} images to memory...")
             self._preload_all_images()
-            
-        # if split == "test":
-        #    self.video_cam_infos = self._get_video_cam_infos()
             
     def _load_metadata(self):
         transforms_path = os.path.join(self.datadir, "transforms.json")
@@ -109,10 +98,6 @@ class ToyArmDataset(Dataset):
         self.FovX = focal2fov(self.focal_x, self.width)
         self.FovY = focal2fov(self.focal_y, self.height)
         
-        self.joint_min = np.array([-12.46, -12.46, -12.46, -11.58, -10.70, -10.12], dtype=np.float32)
-        self.joint_max = np.array([21.55, 21.26, 21.55, 20.38, 21.26, 21.55], dtype=np.float32)
-        self.joint_range = self.joint_max - self.joint_min
-        
         all_times = [frame['time'] for frame in self.frames_meta]
         self.min_time = min(all_times)
         self.max_time = max(all_times)
@@ -121,23 +106,7 @@ class ToyArmDataset(Dataset):
 
     def _filter_frames(self):
         self.frames = []
-        """
-        for frame in self.frames_meta:
-            cam_idx = frame['camera_idx']
-            sample_idx = frame['sample_idx']
 
-            if self.split == "train":
-               if cam_idx in self.train_cameras and sample_idx in self.train_samples:
-                    self.frames.append(frame)
-            
-            elif self.split == "test":
-                if cam_idx in self.test_cameras and sample_idx in self.test_samples:
-                    self.frames.append(frame)
-            
-            elif self.split == "video":
-                if cam_idx in self.video_cameras and sample_idx in self.video_samples:
-                    self.frames.append(frame)
-        """
         for frame in self.frames_meta:
             cam_idx = frame['camera_idx']
 
@@ -157,21 +126,15 @@ class ToyArmDataset(Dataset):
     
         if self.split == "train":
             train_cams = sorted(set([f['camera_idx'] for f in self.frames]))
-            # train_samples = sorted(set([f['sample_idx'] for f in self.frames]))
             print(f"    Train cameras: {train_cams}")
-            # print(f"    Train samples: {train_samples}")
         
         elif self.split == "test":
             test_cams = sorted(set([f['camera_idx'] for f in self.frames]))
-            # test_samples = sorted(set([f['sample_idx'] for f in self.frames]))
             print(f"    Test cameras: {test_cams}")
-            # print(f"    Test samples: {test_samples}")
             
         elif self.split == "video":
             video_cams = sorted(set([f['camera_idx'] for f in self.frames]))
-            # video_samples = sorted(set([f['sample_idx'] for f in self.frames]))
-            print(f"    Video cameras: {video_cams}")
-            # print(f"    Video samples: {video_samples}")  
+            print(f"    Video cameras: {video_cams}")  
         
         unique_cams = sorted({f['camera_idx'] for f in self.frames})
         self.poses = unique_cams if unique_cams else [0]      
@@ -216,17 +179,16 @@ class ToyArmDataset(Dataset):
         transform_matrix = np.array(camera_meta['transform_matrix'], dtype=np.float32)
         
         c2w = transform_matrix
+        
+        R_x_180 = np.diag(np.array([1, -1, -1, 1], dtype=np.float32))
+        c2w = c2w @ R_x_180
+        
         w2c = np.linalg.inv(c2w)
         
         R = np.transpose(w2c[:3, :3])
         T = w2c[:3, 3]
         
         return R, T
-    
-    def _normalize_control_vec(self, joint_pos):
-        joint_pos = np.array(joint_pos, dtype=np.float32)
-        control_vec = 2.0 * (joint_pos - self.joint_min) / self.joint_range - 1.0
-        return torch.from_numpy(control_vec).float()
     
     def __len__(self):
         return len(self.frames)
@@ -240,7 +202,6 @@ class ToyArmDataset(Dataset):
         # Get camera parameters
         R, T = self._get_camera_params(index)
         time = frame['time']
-        # control_vec = self._normalize_control_vec(frame['joint_pos'])
         control_vec = frame['joint_pos']
         
         # Get paths
@@ -261,7 +222,8 @@ class ToyArmDataset(Dataset):
             height=self.height,
             time=time,
             control_vec=control_vec,
-            mask=None
+            mask=None,
+            camera_idx=frame['camera_idx']
         )
         
         return cam_info

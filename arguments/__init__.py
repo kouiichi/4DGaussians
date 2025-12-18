@@ -128,6 +128,10 @@ class OptimizationParams(ParamGroup):
         self.deformation_lr_delay_mult = 0.01
         self.grid_lr_init = 0.0016
         self.grid_lr_final = 0.00016
+        
+        self.use_gmflow = True
+        self.flow_loss_weight = 0.2
+        self.flow_normalize = True
 
         self.feature_lr = 0.0025
         self.opacity_lr = 0.05
