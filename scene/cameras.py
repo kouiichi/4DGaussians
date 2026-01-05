@@ -18,7 +18,7 @@ class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", time = 0, control_vec = None,
-                 mask = None, depth = None, camera_idx = 0
+                 mask = None, camera_idx = 0, depth = None
                  ):
         super(Camera, self).__init__()
 

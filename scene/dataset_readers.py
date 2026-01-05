@@ -46,6 +46,8 @@ class CameraInfo(NamedTuple):
     time : float
     control_vec : np.array
     mask: np.array
+    camera_idx: int
+    depth: np.array
    
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud

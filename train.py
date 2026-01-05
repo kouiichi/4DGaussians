@@ -14,7 +14,7 @@ import os, sys
 import torch
 import cv2
 from random import randint
-from utils.loss_utils import l1_loss, ssim, l2_loss, lpips_loss, flow_loss
+from utils.loss_utils import l1_loss, ssim, l2_loss, lpips_loss, depth_l1_loss, flow_loss
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -225,6 +225,10 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         visibility_filter_list = []
         viewspace_point_tensor_list = []
         
+        # extra keys for depth loss
+        rendered_depth_list = []
+        gt_depth_list = []
+        
         # extra keys for computing flow
         alpha_list = []
         proj_2D_list = []
@@ -249,6 +253,9 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             radii_list.append(radii.unsqueeze(0))
             visibility_filter_list.append(visibility_filter.unsqueeze(0))
             viewspace_point_tensor_list.append(viewspace_point_tensor)
+            
+            rendered_depth_list.append(render_pkg["depth"])
+            gt_depth_list.append(getattr(viewpoint_cam, 'depth', None))
             
             if viewpoint_cam.uid in uid_to_next_uid:
                 next_uid = uid_to_next_uid[viewpoint_cam.uid]
@@ -306,7 +313,38 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         # if opt.lambda_lpips !=0:
         #     lpipsloss = lpips_loss(image_tensor,gt_image_tensor,lpips_model)
         #     loss += opt.lambda_lpips * lpipsloss
-  
+
+        # depth loss
+        L_depth = None
+        
+        if opt.use_depth_loss and stage == "fine":
+            depth_losses = []
+            
+            for batch_idx, viewpoint_cam in enumerate(viewpoint_cams):
+                gt_depth = getattr(viewpoint_cam, 'depth', None)
+                if gt_depth is None:
+                    continue
+                
+                gt_depth = gt_depth.cuda() / opt.depth_scale
+                
+                rendered_depth = rendered_depth_list[batch_idx]
+                
+                if rendered_depth.dim() == 2:
+                    rendered_depth = rendered_depth.unsqueeze(0)
+                if gt_depth.dim() == 2:
+                    gt_depth = gt_depth.unsqueeze(0)
+                    
+                valid_mask = gt_depth > 0
+                
+                d_loss = depth_l1_loss(rendered_depth, gt_depth, valid_mask)
+                
+                if not torch.isnan(d_loss) and d_loss > 0:
+                    depth_losses.append(d_loss)
+            
+            if len(depth_losses) > 0:
+                L_depth = torch.stack(depth_losses).mean()
+                loss = loss + opt.lambda_depth * L_depth
+        
         # flow loss
         Lflow = None
         gs_flow_list = []
@@ -521,14 +559,19 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             
             flow_errors = []
             for idx, (gs_flow, flow_2d_gt, viewpoint) in enumerate(zip(gs_flow_list, flow_2d_gt_list, flow_viewpoint_list)):
-                flow_error = torch.abs(gs_flow - flow_2d_gt).mean().item()
+                H, W = gs_flow.shape[1], gs_flow.shape[2]
+                gs_flow_normalized = gs_flow.clone()
+                gs_flow_normalized[0] = gs_flow[0] / W
+                gs_flow_normalized[1] = gs_flow[1] / H 
+                
+                flow_error = torch.abs(gs_flow_normalized - flow_2d_gt).mean().item()
                 flow_errors.append(flow_error)
                 
                 flow_gt_vis = flow_to_image(flow_2d_gt.permute(1, 2, 0).cpu().numpy(), convert_to_bgr=True)
                 
                 gs_flow_vis = flow_to_image(gs_flow.permute(1, 2, 0).cpu().numpy(), convert_to_bgr=True)
                 
-                flow_diff = torch.abs(gs_flow - flow_2d_gt) * 10
+                flow_diff = torch.abs(gs_flow_normalized - flow_2d_gt) * 10
                 flow_diff_vis = flow_to_image(flow_diff.permute(1, 2, 0).cpu().numpy(), convert_to_bgr=True)
                 
                 save_name = f"train_{viewpoint.image_name}"
@@ -543,6 +586,10 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 np.save(
                     os.path.join(flow_save_dir, f"{save_name}_gs_flow.npy"),
                     gs_flow.numpy()
+                )
+                np.save(
+                    os.path.join(flow_save_dir, f"{save_name}_gs_flow_normalized.npy"), 
+                    gs_flow_normalized.numpy()
                 )
                 
             if len(flow_errors) > 0:
@@ -611,10 +658,8 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    # parser.add_argument("--test_iterations", nargs="+", type=int, default=[3000, 7000, 14000])
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000, 16000, 17000, 18000, 19000, 20000])
-    # parser.add_argument("--save_iterations", nargs="+", type=int, default=[ 14000, 20000, 30_000, 45000, 60000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
