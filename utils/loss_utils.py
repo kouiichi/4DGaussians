@@ -66,15 +66,30 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
         return ssim_map.mean(1).mean(1).mean(1)
 
 
+def depth_l1_loss(pred_depth, gt_depth, valid_mask=None):
+    if pred_depth.dim() == 2:
+        pred_depth = pred_depth.unsqueeze(0)
+    
+    if gt_depth.dim() == 2:
+        gt_depth = gt_depth.unsqueeze(0)
+        
+    if valid_mask is None:
+        valid_mask = gt_depth > 0
+        
+    if valid_mask.sum() == 0:
+        return torch.tensor(0.0, device=pred_depth.device)
+    
+    diff = torch.abs(pred_depth - gt_depth)
+    loss = (diff * valid_mask.float()).sum() / valid_mask.sum()
+    
+    return loss
+
+
 def flow_loss(flow_pred, flow_gt, height, width):
-    flow_pred[0] /= height
-    flow_pred[1] /= width
-    # pred[0] /= width  
-    # pred[1] /= height
+    flow_pred[0] /= width
+    flow_pred[1] /= height
     flow_pred = flow_pred.clamp(-1, 1)
     
-    # gt[0] /= height
-    # gt[1] /= width
     flow_gt[0] /= width
     flow_gt[1] /= height
     flow_gt = flow_gt.clamp(-1, 1)

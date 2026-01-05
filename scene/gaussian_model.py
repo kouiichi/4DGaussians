@@ -22,7 +22,7 @@ from utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
-from scene.deformation import deform_network
+from scene.deformation_factory import create_deform_network
 from scene.regulation import compute_plane_smoothness
 class GaussianModel:
 
@@ -48,7 +48,7 @@ class GaussianModel:
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree  
         self._xyz = torch.empty(0)
-        self._deformation = deform_network(args)
+        self._deformation = create_deform_network(args)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
         self._scaling = torch.empty(0)

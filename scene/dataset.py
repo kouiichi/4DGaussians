@@ -27,6 +27,8 @@ class FourDGSdataset(Dataset):
                 FovY = focal2fov(self.dataset.focal[0], image.shape[1])
                 mask=None
                 control_vec = None
+                depth = None
+                camera_idx = 0
             except:
                 caminfo = self.dataset[index]
                 image = caminfo.image
@@ -40,7 +42,7 @@ class FourDGSdataset(Dataset):
                 camera_idx = caminfo.camera_idx if hasattr(caminfo, 'camera_idx') else index
             return Camera(colmap_id=index,R=R,T=T,FoVx=FovX,FoVy=FovY,image=image,gt_alpha_mask=None,
                               image_name=f"{index}",uid=index,data_device=torch.device("cuda"),time=time,
-                              control_vec=control_vec,mask=mask,camera_idx=camera_idx)
+                              control_vec=control_vec,mask=mask,camera_idx=camera_idx,depth=depth)
         else:
             return self.dataset[index]
     def __len__(self):

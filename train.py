@@ -15,7 +15,7 @@ import torch
 import cv2
 import traceback
 from random import randint
-from utils.loss_utils import l1_loss, ssim, l2_loss, lpips_loss, flow_loss
+from utils.loss_utils import l1_loss, ssim, l2_loss, lpips_loss, depth_l1_loss, flow_loss
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -231,6 +231,10 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         visibility_filter_list = []
         viewspace_point_tensor_list = []
         
+        # extra keys for depth loss
+        rendered_depth_list = []
+        gt_depth_list = []
+        
         # extra keys for computing flow
         alpha_list = []
         proj_2D_list = []
@@ -255,6 +259,9 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             radii_list.append(radii.unsqueeze(0))
             visibility_filter_list.append(visibility_filter.unsqueeze(0))
             viewspace_point_tensor_list.append(viewspace_point_tensor)
+            
+            rendered_depth_list.append(render_pkg["depth"])
+            gt_depth_list.append(getattr(viewpoint_cam, 'depth', None))
             
             if viewpoint_cam.uid in uid_to_next_uid:
                 next_uid = uid_to_next_uid[viewpoint_cam.uid]
@@ -576,14 +583,19 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             
             flow_errors = []
             for idx, (gs_flow, flow_2d_gt, viewpoint) in enumerate(zip(gs_flow_list, flow_2d_gt_list, flow_viewpoint_list)):
-                flow_error = torch.abs(gs_flow - flow_2d_gt).mean().item()
+                H, W = gs_flow.shape[1], gs_flow.shape[2]
+                gs_flow_normalized = gs_flow.clone()
+                gs_flow_normalized[0] = gs_flow[0] / W
+                gs_flow_normalized[1] = gs_flow[1] / H 
+                
+                flow_error = torch.abs(gs_flow_normalized - flow_2d_gt).mean().item()
                 flow_errors.append(flow_error)
                 
                 flow_gt_vis = flow_to_image(flow_2d_gt.permute(1, 2, 0).cpu().numpy(), convert_to_bgr=True)
                 
                 gs_flow_vis = flow_to_image(gs_flow.permute(1, 2, 0).cpu().numpy(), convert_to_bgr=True)
                 
-                flow_diff = torch.abs(gs_flow - flow_2d_gt) * 10
+                flow_diff = torch.abs(gs_flow_normalized - flow_2d_gt) * 10
                 flow_diff_vis = flow_to_image(flow_diff.permute(1, 2, 0).cpu().numpy(), convert_to_bgr=True)
                 
                 save_name = f"train_{viewpoint.image_name}"
@@ -598,6 +610,10 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 np.save(
                     os.path.join(flow_save_dir, f"{save_name}_gs_flow.npy"),
                     gs_flow.numpy()
+                )
+                np.save(
+                    os.path.join(flow_save_dir, f"{save_name}_gs_flow_normalized.npy"), 
+                    gs_flow_normalized.numpy()
                 )
                 
             if len(flow_errors) > 0:

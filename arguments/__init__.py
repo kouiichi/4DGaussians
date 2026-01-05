@@ -92,31 +92,39 @@ class ModelHiddenParams(ParamGroup):
                              'resolution': [64, 64, 64, 25]  # [64,64,64]: resolution of spatial grid. 25: resolution of temporal grid, better to be half length of dynamic frames
                             }
         self.multires = [1, 2, 4, 8] # multi resolution of voxel grid
-        self.no_dx=False # cancel the deformation of Gaussians' position
-        self.no_grid=False # cancel the spatial-temporal hexplane.
-        self.no_ds=False # cancel the deformation of Gaussians' scaling
-        self.no_dr=False # cancel the deformation of Gaussians' rotations
-        self.no_do=True # cancel the deformation of Gaussians' opacity
-        self.no_dshs=True # cancel the deformation of SH colors.
-        self.empty_voxel=False # useless
-        self.grid_pe=0 # useless, I was trying to add positional encoding to hexplane's features
-        self.static_mlp=False # useless
-        self.apply_rotation=False # useless
+        self.no_dx = False # cancel the deformation of Gaussians' position
+        self.no_grid = False # cancel the spatial-temporal hexplane.
+        self.no_ds = False # cancel the deformation of Gaussians' scaling
+        self.no_dr = False # cancel the deformation of Gaussians' rotations
+        self.no_do = True # cancel the deformation of Gaussians' opacity
+        self.no_dshs = True # cancel the deformation of SH colors.
+        self.empty_voxel = False # useless
+        self.grid_pe = 0 # useless, I was trying to add positional encoding to hexplane's features
+        self.static_mlp = False # useless
+        self.apply_rotation = False # useless
         
+        # ========== Architecture Selection ==========
+        self.use_triplane = False  # Set True to use TriPlane instead of HexPlane
+        
+        # ========== Control Signal Configuration ==========
         self.control_input_dim = 6
         self.control_hidden_dim = 64
         self.control_use_pe = False
         self.control_num_frequencies = 4
         self.control_activation = 'relu'
-
+        self.control_output_dim = None  # None = use PE output directly (for TriPlane)
+        
+        # ========== FiLM Fusion Configuration ==========
+        self.film_hidden_dim = 64      # Hidden dim for FiLM condition network
+        self.film_use_residual = True  # Enable residual connections in FiLM blocks
         
         super().__init__(parser, "ModelHiddenParams")
         
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
-        self.dataloader=False
-        self.zerostamp_init=False
-        self.custom_sampler=None
+        self.dataloader = False
+        self.zerostamp_init = False
+        self.custom_sampler = None
         self.iterations = 30_000
         self.coarse_iterations = 3000
         self.position_lr_init = 0.00016
@@ -132,6 +140,10 @@ class OptimizationParams(ParamGroup):
         self.use_gmflow = True
         self.flow_loss_weight = 0.2
         self.flow_normalize = True
+        
+        self.use_depth_loss = True
+        self.lambda_depth = 0.2
+        self.depth_scale = 1000.0
 
         self.feature_lr = 0.0025
         self.opacity_lr = 0.05

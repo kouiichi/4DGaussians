@@ -66,7 +66,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             control_vec = torch.zeros(means3D.shape[0], 6, device=means3D.device)
     else:
         raster_settings = viewpoint_camera['camera']
-        time=torch.tensor(viewpoint_camera['time']).to(means3D.device).repeat(means3D.shape[0],1)
+        time = torch.tensor(viewpoint_camera['time']).to(means3D.device).repeat(means3D.shape[0],1)
         control_vec = viewpoint_camera.get('control_vec', None)
         if control_vec is None:
             control_vec = torch.zeros(means3D.shape[0], 6, device=means3D.device)
@@ -122,10 +122,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     opacity = pc.opacity_activation(opacity_final)
     
     """DropGaussian Implementation"""
-    
     if is_training and "fine" in stage:
         max_drop_rate = 0.2
-        max_iterations = 15000
+        max_iterations = 8000
         current_drop_rate = max_drop_rate * min(iteration / max_iterations, 1.0)
         
         num_gaussians = opacity.shape[0]

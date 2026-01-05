@@ -44,16 +44,16 @@ class ToyArmDataset(Dataset):
         
         if train_cameras is None:
             # train_cameras = list(range(0, 11))
-            train_cameras = [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11]
+            train_cameras = [1, 2, 3, 4, 5, 6, 8, 9, 10, 11]
         if test_cameras is None:
-            test_cameras = [5]  
+            test_cameras = [7]  
             
         self.train_cameras = train_cameras
         self.test_cameras = test_cameras
-        self.video_cameras = [0]
+        self.video_cameras = [3]
    
         self._load_metadata()
-        
+
         self._filter_frames()
 
         if self.preload_images:
@@ -171,6 +171,30 @@ class ToyArmDataset(Dataset):
             print(f"Failed to load image  {image_path}: {e}")
             return torch.zeros(3, self.height, self.width, dtype=torch.float32)
         
+    def _load_depth(self, index):
+        frame = self.frames[index]
+        depth_path = frame.get('depth_file_path')
+        
+        if depth_path is None:
+            return None
+        
+        depth_full_path = os.path.join(self.datadir, depth_path)
+        
+        if not os.path.exists(depth_full_path):
+            return None
+        
+        depth_pil = Image.open(depth_full_path)
+        depth = np.array(depth_pil, dtype=np.float32)
+        
+        if self.ratio != 1.0:
+            depth_pil = depth_pil.resize((self.width, self.height), Image.NEAREST)
+            depth = np.array(depth_pil, dtype=np.float32)
+            
+        depth_tensor = torch.from_numpy(depth).unsqueeze(0).float()
+        
+        return depth_tensor
+        
+        
     def _get_camera_params(self, index):
         frame = self.frames[index]
         camera_idx = frame['camera_idx']
@@ -196,8 +220,11 @@ class ToyArmDataset(Dataset):
     def __getitem__(self, index):
         frame = self.frames[index]
         
-        # Load image on demand
+        # Load image
         image = self._load_image(index)
+        
+        # Load depth
+        depth = self._load_depth(index)
         
         # Get camera parameters
         R, T = self._get_camera_params(index)
