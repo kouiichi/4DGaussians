@@ -137,9 +137,10 @@ class OptimizationParams(ParamGroup):
         self.grid_lr_init = 0.0016
         self.grid_lr_final = 0.00016
         
-        self.use_gmflow = True
-        self.flow_loss_weight = 0.2
-        self.flow_normalize = True
+        # Removed: Optical flow parameters (GSFlow module deleted)
+        # self.use_gmflow = True
+        # self.flow_loss_weight = 0.2
+        # self.flow_normalize = True
         
         self.use_depth_loss = True
         self.lambda_depth = 0.2
@@ -169,11 +170,12 @@ class OptimizationParams(ParamGroup):
         self.opacity_threshold_fine_after = 0.005
         self.batch_size=1
         self.add_point=False
-        # Optical Flow Parameters
-        self.use_flow_loss = True
-        self.lambda_flow = 0.005
-        self.flow_loss_start_iter = 500
-        self.flow_vis_interval = 1000
+        
+        # Removed: Optical flow parameters (GSFlow module deleted)
+        # self.use_flow_loss = True
+        # self.lambda_flow = 0.005
+        # self.flow_loss_start_iter = 500
+        # self.flow_vis_interval = 1000
         
         super().__init__(parser, "Optimization Parameters")
 
